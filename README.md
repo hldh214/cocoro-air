@@ -7,11 +7,13 @@ https://cocoroplusapp.jp.sharp/air
 - [ ] Air Cleaner
     - [x] Temperature Sensor
     - [x] Humidity Sensor
-    - [ ] Air Quality Sensor
+    - [x] Humidifier Mode
     - [ ] Filter Remaining Sensor
-    - [ ] Power
-    - [ ] Mode
-    - [ ] Fan Speed
+    - [ ] ~Power~
+    - [ ] ~Fan Speed~
+    - [ ] ~Air Quality Sensor~
+
+Note: You can use [echonetlite](https://github.com/scottyphillips/echonetlite_homeassistant) for Power, Air quality and Fan speed control. Thus this plugin won't support it unless someone contribute to the project.
 
 ## Installation
 
@@ -22,7 +24,11 @@ https://hacs.xyz/docs/faq/custom_repositories
 ## Configuration
 
 1. Ensure you have an account at [Cocoro Air](https://cocoroplusapp.jp.sharp/air).
-2. Go to **Settings** -> **Devices & Services** in Home Assistant.
-3. Click the **Add Integration** button.
-4. Search for **Cocoro Air**.
-5. Follow the on-screen instructions to enter your Email and Password, then select your device.
+2. Get `device_id` and model name from browser devtools (e.g. from the Cocoro Air app).
+3. Go to **Settings** → **Devices & Services** in Home Assistant, click **Add Integration**, and search for **Cocoro Air**.
+4. Enter your email, password, device_id and model name.
+
+## Model supported
+
+Model that has been tested:
+- KILS50

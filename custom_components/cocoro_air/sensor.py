@@ -1,143 +1,261 @@
-"""Platform for sensor integration."""
+"""Sensor platform for Cocoro Air."""
+from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    PERCENTAGE,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 
-from . import DOMAIN, CocoroAir
+from . import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the sensor platform from a config entry."""
-    _LOGGER.debug("Setting up sensor platform entry.")
+    """Set up Cocoro Air sensor platform."""
+    cocoro_air_api = hass.data[DOMAIN][entry.entry_id]["cocoro_air_api"]
 
-    cocoro_air_api = hass.data[DOMAIN][entry.entry_id]
-
-    devices = entry.data.get("devices", [])
-    entities = []
-
-    try:
-        all_devices_info = await hass.async_add_executor_job(cocoro_air_api.query_devices)
-        device_map = {d['device_id']: d for d in all_devices_info}
-    except Exception as e:
-        _LOGGER.error(f"Error querying devices during setup: {e}")
-        device_map = {}
-
-    for device_id in devices:
-        device_info = device_map.get(device_id, {})
-        device_name = device_info.get('device_name', f"Cocoro Air {device_id}")
-        model_name = device_info.get('model_name', "Cocoro Air")
-
-        coordinator = MyCoordinator(hass, cocoro_air_api, device_id, device_name, model_name)
-        await coordinator.async_config_entry_first_refresh()
-
-        entities.append(CocoroAirTemperatureSensor(coordinator))
-        entities.append(CocoroAirHumiditySensor(coordinator))
-
+    entities = [
+        CocoroAirTemperatureSensor(cocoro_air_api),
+        CocoroAirHumiditySensor(cocoro_air_api),
+        CocoroAirWaterTankSensor(cocoro_air_api),
+        CocoroAirPM25Sensor(cocoro_air_api),
+        CocoroAirCleanedAirVolumeSensor(cocoro_air_api),
+        CocoroAirOdorLevelSensor(cocoro_air_api),
+        CocoroAirDustLevelSensor(cocoro_air_api),
+        CocoroAirCleanlinessLevelSensor(cocoro_air_api),
+    ]
     async_add_entities(entities)
 
 
-class MyCoordinator(DataUpdateCoordinator):
-    """My custom coordinator."""
+class CocoroAirTemperatureSensor(SensorEntity):
+    """Representation of a Cocoro Air Temperature Sensor."""
 
-    def __init__(self, hass, my_api: CocoroAir, device_id: str, device_name: str, model_name: str):
-        """Initialize my coordinator."""
-        super().__init__(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name=f"Cocoro Air update {device_id}",
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=60),
-        )
-        self.my_api = my_api
-        self.device_id = device_id
-        self.device_name = device_name
-        self.model_name = model_name
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Temperature"
+    _attr_icon = "mdi:thermometer"
 
-    async def _async_update_data(self):
-        """Fetch data from API endpoint."""
+    def __init__(self, api):
+        """Initialize the sensor."""
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_temperature"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
         try:
-            return await self.hass.async_add_executor_job(self.my_api.get_sensor_data, self.device_id)
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            self._attr_native_value = data['temperature']
         except Exception as e:
-            _LOGGER.error(f"Error fetching data for {self.device_id}: {e}")
-            raise
+            _LOGGER.warning("Failed to update sensor data: %s", e)
 
+class CocoroAirHumiditySensor(SensorEntity):
+    """Representation of a Cocoro Air Humidity Sensor."""
 
-class CocoroAirSensorBase(CoordinatorEntity, SensorEntity):
-    """Base class for Cocoro Air sensor."""
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Humidity"
+    _attr_icon = "mdi:water-percent"
 
-    def __init__(self, coordinator: DataUpdateCoordinator, name: str,
-                 device_class: SensorDeviceClass, state_class: str, unit_of_measurement: str):
+    def __init__(self, api):
         """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._attr_name = name
-        # Unique ID must include device_id to distinguish between same sensors on different devices
-        self._attr_unique_id = f"{DOMAIN}_{coordinator.device_id}_{name.lower()}"
-        self._attr_device_class = device_class
-        self._attr_state_class = state_class
-        self._attr_native_unit_of_measurement = unit_of_measurement
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_humidity"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
 
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        if self.coordinator.data:
-            return self.coordinator.data.get(self._attr_name.lower())
-        return None
-
-    @property
-    def device_info(self) -> DeviceInfo | None:
-        """Return device information about this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.device_id)},
-            name=self.coordinator.device_name,
-            manufacturer="Sharp",
-            model=self.coordinator.model_name,
-        )
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            self._attr_native_value = data['humidity']
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
 
 
-class CocoroAirTemperatureSensor(CocoroAirSensorBase):
-    """Cocoro Air temperature sensor."""
+class CocoroAirWaterTankSensor(BinarySensorEntity):
+    """Representation of a Cocoro Air Water Tank Sensor."""
 
-    def __init__(self, coordinator: DataUpdateCoordinator):
+    _attr_device_class = BinarySensorDeviceClass.MOISTURE
+    _attr_has_entity_name = True
+    _attr_name = "Water tank"
+    _attr_icon = "mdi:water"
+
+    def __init__(self, api):
         """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            "Temperature",
-            SensorDeviceClass.TEMPERATURE,
-            SensorStateClass.MEASUREMENT,
-            UnitOfTemperature.CELSIUS
-        )
-        self._attr_icon = "mdi:thermometer"
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_water_tank"
+        self._attr_device_info = api.device_info
+        self._attr_is_on = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            self._attr_is_on = data['water_tank']
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
 
 
-class CocoroAirHumiditySensor(CocoroAirSensorBase):
-    """Cocoro Air humidity sensor."""
+class CocoroAirPM25Sensor(SensorEntity):
+    """Representation of a Cocoro Air PM2.5 Sensor."""
 
-    def __init__(self, coordinator: DataUpdateCoordinator):
+    _attr_device_class = SensorDeviceClass.PM25
+    _attr_native_unit_of_measurement = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "PM2.5"
+    _attr_icon = "mdi:air-filter"
+
+    def __init__(self, api):
         """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            "Humidity",
-            SensorDeviceClass.HUMIDITY,
-            SensorStateClass.MEASUREMENT,
-            "%"
-        )
-        self._attr_icon = "mdi:water-percent"
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_pm25"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            self._attr_native_value = data['pm25']
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
+
+
+class CocoroAirCleanedAirVolumeSensor(SensorEntity):
+    """Representation of a Cocoro Air Cleaned Air Volume Sensor."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Cleaned air volume"
+    _attr_icon = "mdi:air-purifier"
+
+    def __init__(self, api):
+        """Initialize the sensor."""
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_cleaned_air_volume"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            self._attr_native_value = data['cleaned_air_volume']
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
+
+
+class CocoroAirOdorLevelSensor(SensorEntity):
+    """Representation of a Cocoro Air Odor Level Sensor."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Odor level"
+    _attr_icon = "mdi:scent"
+
+    def __init__(self, api):
+        """Initialize the sensor."""
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_odor_level"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            raw_value = data['odor_level']
+            if raw_value is not None:
+                self._attr_native_value = round(raw_value / 33)
+            else:
+                self._attr_native_value = None
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
+
+
+class CocoroAirDustLevelSensor(SensorEntity):
+    """Representation of a Cocoro Air Dust Level Sensor."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Dust level"
+    _attr_icon = "mdi:blur"
+
+    def __init__(self, api):
+        """Initialize the sensor."""
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_dust_level"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            raw_value = data['dust_level']
+            if raw_value is not None:
+                self._attr_native_value = round(raw_value / 25)
+            else:
+                self._attr_native_value = None
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
+
+
+class CocoroAirCleanlinessLevelSensor(SensorEntity):
+    """Representation of a Cocoro Air Cleanliness Level Sensor."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_has_entity_name = True
+    _attr_name = "Cleanliness level"
+    _attr_icon = "mdi:air-purifier"
+
+    def __init__(self, api):
+        """Initialize the sensor."""
+        self._api = api
+        self._attr_unique_id = f"{api.device_id}_cleanliness_level"
+        self._attr_device_info = api.device_info
+        self._attr_native_value = None
+
+    async def async_update(self) -> None:
+        """Fetch new state data for the sensor."""
+        try:
+            raw_data = await self._api.update()
+            data = self._api.get_sensor_data(raw_data)
+            raw_value = data['cleanliness_level']
+            if raw_value is not None:
+                self._attr_native_value = round(raw_value / 25)
+            else:
+                self._attr_native_value = None
+        except Exception as e:
+            _LOGGER.warning("Failed to update sensor data: %s", e)
