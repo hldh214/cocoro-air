@@ -7,7 +7,9 @@ https://cocoroplusapp.jp.sharp/air
 - [ ] Air Cleaner
     - [x] Temperature Sensor
     - [x] Humidity Sensor
-    - [ ] Air Quality Sensor
+    - [x] PM2.5 Sensor
+    - [x] Dust Sensor
+    - [x] Odor Sensor
     - [ ] Filter Remaining Sensor
     - [ ] Power
     - [ ] Mode

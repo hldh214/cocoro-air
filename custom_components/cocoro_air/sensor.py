@@ -9,7 +9,10 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -50,6 +53,9 @@ async def async_setup_entry(
 
         entities.append(CocoroAirTemperatureSensor(coordinator))
         entities.append(CocoroAirHumiditySensor(coordinator))
+        entities.append(CocoroAirPM25Sensor(coordinator))
+        entities.append(CocoroAirDustSensor(coordinator))
+        entities.append(CocoroAirOdorSensor(coordinator))
 
     async_add_entities(entities)
 
@@ -84,13 +90,15 @@ class MyCoordinator(DataUpdateCoordinator):
 class CocoroAirSensorBase(CoordinatorEntity, SensorEntity):
     """Base class for Cocoro Air sensor."""
 
+    _data_key: str = ""
+
     def __init__(self, coordinator: DataUpdateCoordinator, name: str,
-                 device_class: SensorDeviceClass, state_class: str, unit_of_measurement: str):
+                 device_class: SensorDeviceClass | None, state_class: str,
+                 unit_of_measurement: str | None):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._attr_name = name
-        # Unique ID must include device_id to distinguish between same sensors on different devices
-        self._attr_unique_id = f"{DOMAIN}_{coordinator.device_id}_{name.lower()}"
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.device_id}_{name.lower().replace(' ', '_')}"
         self._attr_device_class = device_class
         self._attr_state_class = state_class
         self._attr_native_unit_of_measurement = unit_of_measurement
@@ -99,7 +107,7 @@ class CocoroAirSensorBase(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the state of the sensor."""
         if self.coordinator.data:
-            return self.coordinator.data.get(self._attr_name.lower())
+            return self.coordinator.data.get(self._data_key)
         return None
 
     @property
@@ -114,30 +122,70 @@ class CocoroAirSensorBase(CoordinatorEntity, SensorEntity):
 
 
 class CocoroAirTemperatureSensor(CocoroAirSensorBase):
-    """Cocoro Air temperature sensor."""
+    _data_key = "temperature"
 
     def __init__(self, coordinator: DataUpdateCoordinator):
-        """Initialize the sensor."""
         super().__init__(
             coordinator,
             "Temperature",
             SensorDeviceClass.TEMPERATURE,
             SensorStateClass.MEASUREMENT,
-            UnitOfTemperature.CELSIUS
+            UnitOfTemperature.CELSIUS,
         )
         self._attr_icon = "mdi:thermometer"
 
 
 class CocoroAirHumiditySensor(CocoroAirSensorBase):
-    """Cocoro Air humidity sensor."""
+    _data_key = "humidity"
 
     def __init__(self, coordinator: DataUpdateCoordinator):
-        """Initialize the sensor."""
         super().__init__(
             coordinator,
             "Humidity",
             SensorDeviceClass.HUMIDITY,
             SensorStateClass.MEASUREMENT,
-            "%"
+            "%",
         )
         self._attr_icon = "mdi:water-percent"
+
+
+class CocoroAirPM25Sensor(CocoroAirSensorBase):
+    _data_key = "pm25"
+
+    def __init__(self, coordinator: DataUpdateCoordinator):
+        super().__init__(
+            coordinator,
+            "PM2.5",
+            SensorDeviceClass.PM25,
+            SensorStateClass.MEASUREMENT,
+            CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        )
+        self._attr_icon = "mdi:blur"
+
+
+class CocoroAirDustSensor(CocoroAirSensorBase):
+    _data_key = "dust"
+
+    def __init__(self, coordinator: DataUpdateCoordinator):
+        super().__init__(
+            coordinator,
+            "Dust",
+            None,
+            SensorStateClass.MEASUREMENT,
+            None,
+        )
+        self._attr_icon = "mdi:blur"
+
+
+class CocoroAirOdorSensor(CocoroAirSensorBase):
+    _data_key = "odor"
+
+    def __init__(self, coordinator: DataUpdateCoordinator):
+        super().__init__(
+            coordinator,
+            "Odor",
+            None,
+            SensorStateClass.MEASUREMENT,
+            None,
+        )
+        self._attr_icon = "mdi:scent"

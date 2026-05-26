@@ -150,42 +150,73 @@ class CocoroAir:
             _LOGGER.error(f"Error querying devices: {e}")
             raise
 
+    def _fetch_opc(self, device_id, opc):
+        """Fetch a single opc block (k1, k2, etc.) from the sensor API."""
+        url = 'https://cocoroplusapp.jp.sharp/v1/cocoro-air/sensors-conceal/air-cleaner'
+        params = {
+            'device_id': device_id,
+            'event_key': 'echonet_property',
+            'opc': opc,
+        }
+
+        res = self.opener.get(url, params=params)
+
+        if res.status_code == 401:
+            _LOGGER.info('Session expired, re-login')
+            self.login()
+            res = self.opener.get(url, params=params)
+
+        data = res.json().get('sensors_aircleaner_021', {}).get('body', {}).get('data', [{}])[0]
+        return data.get(opc)
+
     def get_sensor_data(self, device_id):
         if not device_id:
             _LOGGER.error("Device ID not provided")
             return None
 
-        res = self.opener.get(f'https://cocoroplusapp.jp.sharp/v1/cocoro-air/sensors-conceal/air-cleaner', params={
-            'device_id': device_id,
-            'event_key': 'echonet_property',
-            'opc': 'k1',
-        })
-
-        if res.status_code == 401:
-            _LOGGER.info('Login again')
-            self.login()
-            res = self.opener.get(f'https://cocoroplusapp.jp.sharp/v1/cocoro-air/sensors-conceal/air-cleaner', params={
-                'device_id': device_id,
-                'event_key': 'echonet_property',
-                'opc': 'k1',
-            })
-
-        _LOGGER.debug(f'cocoro-air response: {res.text}')
-
         try:
-            k1_data = res.json()['sensors_aircleaner_021']['body']['data'][0]['k1']
-        except (KeyError, ValueError, IndexError) as e:
-            _LOGGER.error(f'Failed to get sensor data: {e}, response: {res.text}')
+            k1 = self._fetch_opc(device_id, 'k1')
+        except Exception as e:
+            _LOGGER.error(f'Failed to fetch k1: {e}')
             return None
 
+        if not k1:
+            _LOGGER.error('k1 data is empty')
+            return None
+
+        _LOGGER.debug(f'k1 raw: {k1}')
+
         try:
-            temperature = int(k1_data['s1'], 16)
-            humidity = int(k1_data['s2'], 16)
+            temperature = int(k1['s1'], 16)
+            humidity = int(k1['s2'], 16)
         except (KeyError, ValueError) as e:
-            _LOGGER.error(f'Failed to parse sensor values: {e}, data: {k1_data}')
+            _LOGGER.error(f'Failed to parse sensor values: {e}, data: {k1}')
             return None
 
-        return {
+        result = {
             'temperature': temperature,
             'humidity': humidity,
         }
+
+        # PM2.5 from k1.s8 (µg/m³)
+        try:
+            if 's8' in k1:
+                result['pm25'] = int(k1['s8'], 16)
+        except (ValueError, TypeError) as e:
+            _LOGGER.warning(f'Failed to parse PM2.5 from k1.s8: {e}')
+
+        # k2 contains dust and odor levels (only available when device is actively running)
+        try:
+            k2 = self._fetch_opc(device_id, 'k2')
+            if k2:
+                _LOGGER.debug(f'k2 raw: {k2}')
+                if 's16' in k2:
+                    result['odor'] = int(k2['s16'], 16)
+                if 's17' in k2:
+                    result['dust'] = int(k2['s17'], 16)
+            else:
+                _LOGGER.debug('k2 empty (device may be in standby)')
+        except Exception as e:
+            _LOGGER.debug(f'k2 fetch failed: {e}')
+
+        return result
