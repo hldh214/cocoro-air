@@ -1,4 +1,5 @@
 import logging
+import re
 
 import httpx
 import voluptuous as vol
@@ -64,44 +65,72 @@ class CocoroAir:
             }, timeout=10)
         return self._opener
 
+    @staticmethod
+    def _login_state(response):
+        """Read Auth0's CSRF state without exposing the session URL."""
+        match = re.search(r'name="state" value="([^"]+)"', response.text)
+        if match is None:
+            raise ValueError("Login page is missing the state field")
+        return match.group(1)
+
     def login(self):
-        _LOGGER.debug(f"Starting login for {self.email}")
-        try:
-            res = self.opener.get('https://cocoroplusapp.jp.sharp/v1/cocoro-air/login')
-            res.raise_for_status()
+        """Authenticate using Cocoro Members' identifier-first Auth0 flow.
 
-            redirect_url = res.json()['redirectUrl']
-            _LOGGER.debug(f"Redirect URL: {redirect_url}")
+        Adapted from yuyuvn/cocoro-air commit 67e734e. Login pages require
+        an HTML Accept header; the API client's JSON default returns 406.
+        """
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        res = self.opener.get('https://cocoroplusapp.jp.sharp/v1/cocoro-air/login')
+        res.raise_for_status()
+        res = self.opener.get(res.json()['redirectUrl'], headers=headers, follow_redirects=True)
+        res.raise_for_status()
+        if res.url.host == 'cocoroplusapp.jp.sharp' and res.url.path.startswith('/air'):
+            _LOGGER.info('Login success (existing session)')
+            return
+        if res.url.host != 'auth.cocoromembers.jp.sharp' or res.url.path != '/u/login/identifier':
+            raise ValueError("Unexpected login page")
 
-            res = self.opener.get(redirect_url, follow_redirects=True)
-            res.raise_for_status()
+        state = self._login_state(res)
+        res = self.opener.post(
+            'https://auth.cocoromembers.jp.sharp/u/login/identifier',
+            params={'state': state},
+            data={
+                'state': state,
+                'username': self.email,
+                'captcha': '',
+                'js-available': 'true',
+                'webauthn-available': 'false',
+                'is-brave': 'false',
+                'webauthn-platform-available': 'false',
+                'action': 'default',
+            },
+            headers=headers,
+            follow_redirects=True,
+        )
+        res.raise_for_status()
+        if res.url.host != 'auth.cocoromembers.jp.sharp' or res.url.path != '/u/login/password':
+            raise ValueError("Unexpected page after identifier step")
 
-            if '/sic-front/sso/ExLoginViewAction.do' not in res.url.path:
-                _LOGGER.warning(f"Unexpected redirect path: {res.url.path}")
-
-            res = self.opener.post('https://cocoromembers.jp.sharp/sic-front/sso/A050101ExLoginAction.do', data={
-                'memberId': self.email,
-                'password': self.password,
-                'captchaText': '1',
-                'autoLogin': 'on',
-                'exsiteId': '50130',
-            }, follow_redirects=True)
-
-            res.raise_for_status()
-
-            _LOGGER.debug(f"Login response URL: {res.url}")
-
-            if b'login=success' not in res.url.query:
-                _LOGGER.error(f"Login failed? URL: {res.url}")
-                # Don't assert, let it fail downstream or throw error here
-                raise Exception("Login failed: 'login=success' not found in URL")
-
-            _LOGGER.info('Login success')
-            _LOGGER.debug(f"Cookies after login: {dict(self.opener.cookies)}")
-
-        except Exception as e:
-            _LOGGER.error(f"Exception during login: {e}")
-            raise
+        state = self._login_state(res)
+        res = self.opener.post(
+            'https://auth.cocoromembers.jp.sharp/u/login/password',
+            params={'state': state},
+            data={'state': state, 'username': self.email,
+                  'password': self.password, 'action': 'default'},
+            headers=headers,
+            follow_redirects=True,
+        )
+        res.raise_for_status()
+        if (res.url.host != 'cocoroplusapp.jp.sharp'
+                or not res.url.path.startswith('/air')
+                or b'login=success' not in res.url.query):
+            raise ValueError("Login failed after password step")
+        _LOGGER.info('Login success')
 
     def query_devices(self):
         """Query for available devices."""
@@ -110,6 +139,9 @@ class CocoroAir:
 
         try:
             res = self.opener.get(url)
+            if res.status_code == 401:
+                self.login()
+                res = self.opener.get(url)
             _LOGGER.debug(f"Device query status: {res.status_code}")
             res.raise_for_status()
 
