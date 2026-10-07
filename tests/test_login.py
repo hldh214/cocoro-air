@@ -10,14 +10,12 @@ import httpx
 
 
 def load_api():
-    # The API has no HA runtime dependency; isolate it from integration imports.
-    source = Path(__file__).parents[1] / "custom_components/cocoro_air/__init__.py"
-    tree = ast.parse(source.read_text())
-    nodes = [node for node in tree.body if isinstance(node, ast.ClassDef)
-             and node.name in ("CocoroAir", "CocoroAirLoginError")]
-    namespace = {"httpx": httpx, "re": re, "_LOGGER": logging.getLogger("test")}
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
-    return namespace["CocoroAir"]
+    import importlib.util
+    source = Path(__file__).parents[1] / "custom_components/cocoro_air/api.py"
+    spec = importlib.util.spec_from_file_location("cocoro_api_login_tests", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.CocoroAir
 
 
 CocoroAir = load_api()

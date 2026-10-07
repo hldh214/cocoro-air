@@ -1,0 +1,136 @@
+get_cloud_info:
+  name: Read cloud information
+  description: Read device capabilities, supported modes, supplies, registered pets, notification settings and hourly electricity tariff.
+  fields:
+    device_id: &device
+      name: Device
+      description: Select a Cocoro Air device. Optional when exactly one device is configured.
+      selector:
+        device:
+          integration: cocoro_air
+get_history:
+  name: Read history
+  description: Read paginated air measurements or daily/monthly electricity costs. Times must include a timezone; costs are JPY.
+  fields:
+    device_id: *device
+    kind:
+      required: true
+      selector:
+        select:
+          options: [air, cost_daily, cost_monthly]
+    from_time:
+      required: true
+      example: '2026-10-07T00:00:00+09:00'
+      selector:
+        text:
+    to_time:
+      required: true
+      example: '2026-10-07T23:59:59+09:00'
+      selector:
+        text:
+    count:
+      default: 1000
+      selector:
+        number:
+          min: 1
+          max: 1000
+          mode: box
+    offset:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 100000
+          mode: box
+get_weather:
+  name: Read outdoor air information
+  description: Read the same weather, pollen, outdoor PM2.5, yellow sand and laundry forecast as the Sharp webpage, for the device location.
+  fields:
+    device_id: *device
+    date:
+      description: Optional date accepted by the Sharp weather API.
+      selector:
+        text:
+set_pet:
+  name: Register or update pet
+  description: Register a dog/cat or update an existing pet. Read pet_id using get_cloud_info. Updates preserve hidden pet attributes.
+  fields:
+    device_id: *device
+    pet_id:
+      description: Omit for a new pet; provide the cloud record ID to update.
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    species:
+      required: true
+      selector:
+        select:
+          options: [dog, cat]
+    sex:
+      required: true
+      selector:
+        select:
+          options: [male, female]
+    breed:
+      selector:
+        text:
+delete_pet:
+  name: Remove pet registration
+  description: Remove a registered pet from this device. This also removes its pet mode option when applicable.
+  fields:
+    device_id: *device
+    pet_id:
+      required: true
+      selector:
+        text:
+set_notifications:
+  name: Set Sharp cloud notifications
+  description: Merge supported preferences without overwriting other settings. Keys air_cleaner, temperature (booleans), temperature_lower and temperature_upper (integer 0–40). Notifications are delivered by Sharp, not HA.
+  fields:
+    device_id: *device
+    preferences:
+      required: true
+      example: '{"temperature": true, "temperature_lower": 10, "temperature_upper": 30}'
+      selector:
+        object:
+set_electricity_tariff:
+  name: Set hourly electricity tariff
+  description: Set 24 hourly JPY/kWh prices (hours 0–23), matching the webpage time-of-day tariff. Existing cloud metadata is retained.
+  fields:
+    device_id: *device
+    hourly_prices:
+      required: true
+      selector:
+        object:
+maintain_supply:
+  name: Mark supply cleaned or replaced
+  description: Use only after actual maintenance. Clean records the care date. Replace resets the device usage counter for supported filters/cartridge and records replacement when the webpage does. Physical PCI replacement is not remotely available.
+  fields:
+    device_id: *device
+    supply:
+      required: true
+      selector:
+        select:
+          options: [dust_filter, deodorizing_filter, humidifying_filter, ion_cartridge, pci_unit, back_panel, prefilter, humidifying_prefilter]
+    action:
+      required: true
+      selector:
+        select:
+          options: [clean, replace]
+set_prefilter:
+  name: Set disposable prefilter use
+  description: Start or stop use of a disposable prefilter, matching the webpage. Starting use records a new care baseline.
+  fields:
+    device_id: *device
+    supply:
+      required: true
+      selector:
+        select:
+          options: [prefilter, humidifying_prefilter]
+    active:
+      required: true
+      selector:
+        boolean:

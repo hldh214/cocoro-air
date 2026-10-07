@@ -1,6 +1,6 @@
 {
   "name": "Cocoro Air",
   "render_readme": true,
-  "domains": ["sensor"],
+  "domains": ["sensor", "fan", "switch", "binary_sensor", "number", "button"],
   "iot_class": ["Cloud Polling"]
 }

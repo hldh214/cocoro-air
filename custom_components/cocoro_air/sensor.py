@@ -1,143 +1,101 @@
-"""Platform for sensor integration."""
+"""Device measurements and cloud care information."""
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfTemperature, EntityCategory
+from .entity import CocoroAirEntity, coordinators
 
-import logging
-from datetime import timedelta
+# key: device class, unit; vendor pollution levels deliberately have no AQI class.
+DESCRIPTIONS = {
+    'temperature': (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    'humidity': (SensorDeviceClass.HUMIDITY, '%'),
+    'pm25': (SensorDeviceClass.PM25, 'µg/m³'),
+    'dust_level': (None, None), 'odor_level': (None, None),
+    'air_quality': (None, None), 'brightness': (None, None),
+    'operating_status': (None, None),
+    'cost_today': (SensorDeviceClass.MONETARY,'JPY'),
+    'cost_month': (SensorDeviceClass.MONETARY,'JPY'),
+    'electricity_rate': (None,'JPY/kWh'),
+    'outdoor_temperature': (SensorDeviceClass.TEMPERATURE,UnitOfTemperature.CELSIUS),
+    'outdoor_humidity': (SensorDeviceClass.HUMIDITY,'%'),
+    'pollen': (None,None), 'pm25_forecast': (None,None),
+    'yellow_sand': (None,None), 'laundry': (None,None),
+    'weather_code': (None,None),
+}
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
-)
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 
-from . import DOMAIN, CocoroAir
-
-_LOGGER = logging.getLogger(__name__)
-
-
-async def async_setup_entry(
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback
-) -> None:
-    """Set up the sensor platform from a config entry."""
-    _LOGGER.debug("Setting up sensor platform entry.")
-
-    cocoro_air_api = hass.data[DOMAIN][entry.entry_id]
-
-    devices = entry.data.get("devices", [])
+async def async_setup_entry(hass, entry, async_add_entities):
     entities = []
-
-    try:
-        all_devices_info = await hass.async_add_executor_job(cocoro_air_api.query_devices)
-        device_map = {d['device_id']: d for d in all_devices_info}
-    except Exception as e:
-        _LOGGER.error(f"Error querying devices during setup: {e}")
-        device_map = {}
-
-    for device_id in devices:
-        device_info = device_map.get(device_id, {})
-        device_name = device_info.get('device_name', f"Cocoro Air {device_id}")
-        model_name = device_info.get('model_name', "Cocoro Air")
-
-        coordinator = MyCoordinator(hass, cocoro_air_api, device_id, device_name, model_name)
-        await coordinator.async_config_entry_first_refresh()
-
-        entities.append(CocoroAirTemperatureSensor(coordinator))
-        entities.append(CocoroAirHumiditySensor(coordinator))
-
+    for c in coordinators(hass, entry):
+        keys = ['temperature', 'humidity', 'odor_level', 'air_quality', 'operating_status',
+                'cost_today','cost_month','electricity_rate']
+        if c.device.get('zip_code'):
+            keys.extend(['outdoor_temperature','outdoor_humidity','pollen','pm25_forecast','yellow_sand','laundry','weather_code'])
+        if c.spec.get('hasPM25Sensor'):
+            keys.append('pm25')
+        if c.spec.get('hasDustSensor'):
+            keys.append('dust_level')
+        if c.spec.get('hasLightSensor'):
+            keys.append('brightness')
+        entities.extend(CocoroAirSensor(c, key) for key in keys)
+        seen = set()
+        def add_supplies(coordinator=c, registered=seen):
+            new = []
+            for name, supply in (coordinator.data or {}).get('supplies', {}).items():
+                fields = ['last_cleaned']
+                if supply.get('remaining') is not None:
+                    fields.append('remaining')
+                for field in fields:
+                    key = (name, field)
+                    if key not in registered:
+                        registered.add(key)
+                        new.append(CocoroAirSupplySensor(coordinator,name,field))
+            if new:
+                async_add_entities(new)
+        add_supplies()
+        entry.async_on_unload(c.async_add_listener(add_supplies))
     async_add_entities(entities)
 
 
-class MyCoordinator(DataUpdateCoordinator):
-    """My custom coordinator."""
-
-    def __init__(self, hass, my_api: CocoroAir, device_id: str, device_name: str, model_name: str):
-        """Initialize my coordinator."""
-        super().__init__(
-            hass,
-            _LOGGER,
-            # Name of the data. For logging purposes.
-            name=f"Cocoro Air update {device_id}",
-            # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(seconds=60),
-        )
-        self.my_api = my_api
-        self.device_id = device_id
-        self.device_name = device_name
-        self.model_name = model_name
-
-    async def _async_update_data(self):
-        """Fetch data from API endpoint."""
-        try:
-            return await self.hass.async_add_executor_job(self.my_api.get_sensor_data, self.device_id)
-        except Exception as e:
-            _LOGGER.error(f"Error fetching data for {self.device_id}: {e}")
-            raise
-
-
-class CocoroAirSensorBase(CoordinatorEntity, SensorEntity):
-    """Base class for Cocoro Air sensor."""
-
-    def __init__(self, coordinator: DataUpdateCoordinator, name: str,
-                 device_class: SensorDeviceClass, state_class: str, unit_of_measurement: str):
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._attr_name = name
-        # Unique ID must include device_id to distinguish between same sensors on different devices
-        self._attr_unique_id = f"{DOMAIN}_{coordinator.device_id}_{name.lower()}"
-        self._attr_device_class = device_class
-        self._attr_state_class = state_class
-        self._attr_native_unit_of_measurement = unit_of_measurement
+class CocoroAirSensor(CocoroAirEntity, SensorEntity):
+    def __init__(self, coordinator, key):
+        # Names/unique IDs for Temperature and Humidity exactly match version 1.1.
+        super().__init__(coordinator, key, key.replace('_',' ').title())
+        self._attr_device_class, self._attr_native_unit_of_measurement = DESCRIPTIONS[key]
+        if self._attr_native_unit_of_measurement and key not in ('cost_today','cost_month'):
+            self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self):
-        """Return the state of the sensor."""
-        if self.coordinator.data:
-            return self.coordinator.data.get(self._attr_name.lower())
-        return None
+        key = 'current_mode' if self._key == 'operating_status' else self._key
+        return self.coordinator.data.get(key)
 
     @property
-    def device_info(self) -> DeviceInfo | None:
-        """Return device information about this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.coordinator.device_id)},
-            name=self.coordinator.device_name,
-            manufacturer="Sharp",
-            model=self.coordinator.model_name,
-        )
+    def extra_state_attributes(self):
+        if self._key in ('temperature','humidity','pm25'):
+            return {'measurement_status': self.coordinator.data.get(self._key+'_status')}
+        return None
 
 
-class CocoroAirTemperatureSensor(CocoroAirSensorBase):
-    """Cocoro Air temperature sensor."""
+class CocoroAirSupplySensor(CocoroAirEntity, SensorEntity):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: DataUpdateCoordinator):
-        """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            "Temperature",
-            SensorDeviceClass.TEMPERATURE,
-            SensorStateClass.MEASUREMENT,
-            UnitOfTemperature.CELSIUS
-        )
-        self._attr_icon = "mdi:thermometer"
+    def __init__(self, coordinator, name, field):
+        super().__init__(coordinator, name+'_'+field, (name+' '+field).replace('_',' ').title())
+        self._supply_name = name
+        self._field = field
+        if field == 'remaining':
+            self._attr_native_unit_of_measurement = '%'
+        else:
+            self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
+    @property
+    def native_value(self):
+        value = self.coordinator.data.get('supplies', {}).get(self._supply_name, {}).get(self._field)
+        if self._field == 'last_cleaned' and value:
+            from homeassistant.util.dt import parse_datetime
+            return parse_datetime(value)
+        return value
 
-class CocoroAirHumiditySensor(CocoroAirSensorBase):
-    """Cocoro Air humidity sensor."""
-
-    def __init__(self, coordinator: DataUpdateCoordinator):
-        """Initialize the sensor."""
-        super().__init__(
-            coordinator,
-            "Humidity",
-            SensorDeviceClass.HUMIDITY,
-            SensorStateClass.MEASUREMENT,
-            "%"
-        )
-        self._attr_icon = "mdi:water-percent"
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data.get('supplies', {}).get(self._supply_name, {})
+        return {'part_model': data.get('model'), 'cleaning_interval_hours': data.get('cleaning_interval_hours')}
