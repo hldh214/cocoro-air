@@ -26,7 +26,7 @@ AUTH = "https://auth.cocoromembers.jp.sharp"
 
 
 class LoginTests(unittest.TestCase):
-    def make_api(self, *, invalid_password=False, missing_state=False, already_logged_in=False):
+    def make_api(self, *, invalid_password=False, missing_state=False, already_logged_in=False, custom_prompt=False):
         self.authenticated = False
         self.login_count = 0
 
@@ -45,6 +45,10 @@ class LoginTests(unittest.TestCase):
                     return httpx.Response(302, headers={"Location": target, "Set-Cookie": "session=test; Path=/"})
                 if "session=test" not in request.headers.get("cookie", ""):
                     return httpx.Response(400)
+                if path.startswith("/u/custom-prompt/"):
+                    return httpx.Response(200, text='<h1>Review terms</h1><p>Please confirm the updated terms.</p>'
+                                          '<input type="hidden" name="state" value="PRIVATE_TOKEN">'
+                                          '<script>PRIVATE_SCRIPT_TOKEN</script><button>Continue</button>')
                 if request.method == "GET":
                     state = "first" if path.endswith("identifier") else "second"
                     html = "<form></form>" if missing_state else f'<input name="state" value="{state}">'
@@ -60,6 +64,8 @@ class LoginTests(unittest.TestCase):
                     if form.get("state") != ["second"] or form.get("password") != ["secret"]:
                         return httpx.Response(400)
                     self.authenticated = True
+                    if custom_prompt:
+                        return httpx.Response(302, headers={"Location": AUTH + "/u/custom-prompt/terms"})
                     return httpx.Response(302, headers={"Location": BASE + "/air?login=success"})
             if path == "/air":
                 self.authenticated = True
@@ -113,6 +119,12 @@ class LoginTests(unittest.TestCase):
         api = self.make_api()
         self.assertEqual(api.query_devices()[0]["device_id"], "device1")
         self.assertEqual(self.login_count, 1)
+
+    def test_custom_prompt_reports_visible_action_without_tokens(self):
+        api = self.make_api(custom_prompt=True)
+        with self.assertRaisesRegex(Exception, "Review terms") as result:
+            api.login()
+        self.assertNotIn("PRIVATE", str(result.exception))
 
 
 if __name__ == "__main__":

@@ -73,6 +73,33 @@ class CocoroAir:
             raise ValueError("Login page is missing the state field")
         return match.group(1)
 
+    @staticmethod
+    def _login_prompt(response):
+        """Report visible prompt text without hidden fields or scripts."""
+        from html.parser import HTMLParser
+
+        class PromptParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.hidden = 0
+                self.text = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag in ('script', 'style'):
+                    self.hidden += 1
+
+            def handle_endtag(self, tag):
+                if tag in ('script', 'style'):
+                    self.hidden = max(0, self.hidden - 1)
+
+            def handle_data(self, data):
+                if not self.hidden and data.strip():
+                    self.text.append(data.strip())
+
+        parser = PromptParser()
+        parser.feed(response.text)
+        return ' '.join(parser.text)[:1500]
+
     def login(self):
         """Authenticate using Cocoro Members' identifier-first Auth0 flow.
 
@@ -126,6 +153,8 @@ class CocoroAir:
             follow_redirects=True,
         )
         res.raise_for_status()
+        if res.url.host == 'auth.cocoromembers.jp.sharp' and res.url.path.startswith('/u/custom-prompt/'):
+            raise ValueError(f"Additional account login step required: {self._login_prompt(res)}")
         if (res.url.host != 'cocoroplusapp.jp.sharp'
                 or not res.url.path.startswith('/air')
                 or b'login=success' not in res.url.query):
