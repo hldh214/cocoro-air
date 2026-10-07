@@ -120,9 +120,9 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(api.query_devices()[0]["device_id"], "device1")
         self.assertEqual(self.login_count, 1)
 
-    def test_custom_prompt_reports_visible_action_without_tokens(self):
+    def test_custom_prompt_requires_manual_account_confirmation(self):
         api = self.make_api(custom_prompt=True)
-        with self.assertRaisesRegex(Exception, "Review terms") as result:
+        with self.assertRaisesRegex(Exception, "https://cocoroplusapp.jp.sharp/air") as result:
             api.login()
         self.assertNotIn("PRIVATE", str(result.exception))
 

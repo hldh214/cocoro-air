@@ -36,6 +36,9 @@ temperature/humidity entity IDs remain unchanged. Expired sessions are
 renewed once when device discovery or sensor requests return HTTP 401.
 
 After installing the update, restart Home Assistant to load the new Python code.
+If login requires additional account confirmation, sign in at
+https://cocoroplusapp.jp.sharp/air and complete the displayed prompts (such as
+updated terms), then reload the Cocoro Air integration in Home Assistant.
 
 Run the isolated login regression tests (requires `httpx`):
 
