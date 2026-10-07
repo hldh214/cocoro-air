@@ -129,7 +129,10 @@ class CocoroAir:
         if (res.url.host != 'cocoroplusapp.jp.sharp'
                 or not res.url.path.startswith('/air')
                 or b'login=success' not in res.url.query):
-            raise ValueError("Login failed after password step")
+            raise ValueError(
+                "Login failed after password step "
+                f"(HTTP {res.status_code}, {res.url.host}{res.url.path})"
+            )
         _LOGGER.info('Login success')
 
     def query_devices(self):
