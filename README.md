@@ -35,6 +35,35 @@ If Sharp requires updated terms or another account confirmation, complete it at 
 
 Device state refreshes every 60 seconds, and optional cloud information every 15 minutes. Commands refresh the device afterward. The refresh button and `get_cloud_info` force a cloud refresh. Sharp's cloud may take time to report a command result. Optional cloud failures do not disable the basic device controls.
 
+## Authentication diagnostics (1.2.1)
+
+If login or reauthentication fails, enable debug logging for `custom_components.cocoro_air`.
+For a failure after restart, merge this into the existing `logger` configuration in
+`configuration.yaml`, then restart Home Assistant:
+
+```yaml
+logger:
+  logs:
+    custom_components.cocoro_air: debug
+```
+
+Reproduce the failure once and copy the Cocoro Air log lines from the beginning of
+login through the failure. Include the integration version, full HA version, and
+whether the failure occurred during startup, adding the integration, or reauthentication.
+Remove the debug setting after collecting logs. You can also use the integration's
+**Enable debug logging** menu option for a failure reproducible without a restart.
+
+Diagnostics include the actual HTTP client/version, login stage, request method,
+known endpoint, redirect response statuses, elapsed time, form-field presence and
+fixed labels for recognized page signals (credentials, CAPTCHA, blocked account,
+rate limiting). Page signals are hints, not definitive failure reasons. Unknown
+hosts/paths and custom-prompt identifiers are redacted. Credentials, cookies,
+query strings, fragments and raw response bodies are not logged by this integration.
+Do not enable `httpx`, `httpx2` or `httpcore` logging for a public issue: those
+libraries can log full authentication URLs. Review logs before posting them.
+Version 1.2.1 adds diagnostics only; it does not change authentication behavior or
+fix the unconfirmed cause of issue #7.
+
 ## Actions
 
 Actions are available under **Developer tools → Actions** in domain `cocoro_air`. Select a configured HA device; `device_id` may be omitted when exactly one device is configured. Raw Sharp device IDs are also accepted. Read actions require a response variable in scripts.

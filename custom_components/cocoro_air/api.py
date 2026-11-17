@@ -1,6 +1,7 @@
 """Synchronous, serialized Cocoro Air cloud client with no HA dependencies."""
 import logging
 import re
+from time import monotonic
 from threading import RLock
 
 import httpx
@@ -55,17 +56,86 @@ class CocoroAir:
             raise ValueError("Login page is missing the state field")
         return match.group(1)
 
+    @staticmethod
+    def _login_endpoint(url):
+        """Only known routes may enter shared logs; URLs can contain credentials."""
+        routes = {
+            'cocoroplusapp.jp.sharp': {
+                '/v1/cocoro-air/login', '/v1/cocoro-air/login/callback/cocoromembers',
+                '/air',
+            },
+            'auth.cocoromembers.jp.sharp': {
+                '/authorize', '/authorize/resume', '/u/login/identifier',
+                '/u/login/password',
+            },
+        }
+        if url.host not in routes:
+            return '<other-host>/<redacted>'
+        path = url.path
+        if path.startswith('/u/custom-prompt/'):
+            path = '/u/custom-prompt/<redacted>'
+        elif path not in routes[url.host]:
+            path = '/<redacted>'
+        return url.host + path
+
+    def _login_request(self, stage, method, url, **kwargs):
+        """Record bounded structural diagnostics, never raw HTTP contents."""
+        started = monotonic()
+        _LOGGER.debug('Login stage=%s request method=%s endpoint=%s',
+                      stage, method, self._login_endpoint(httpx.URL(url)))
+        try:
+            response = getattr(self.opener, method.lower())(url, **kwargs)
+        except httpx.RequestError as error:
+            _LOGGER.debug('Login stage=%s transport_error=%s', stage, type(error).__name__)
+            raise
+        for hop in [*response.history, response]:
+            _LOGGER.debug('Login stage=%s response method=%s status=%s endpoint=%s',
+                          stage, hop.request.method, hop.status_code,
+                          self._login_endpoint(hop.url))
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            # Publish fixed labels only, even if a page echoes user input or tokens.
+            text = response.text.lower()
+            signals = [label for label, phrases in {
+                'invalid_credentials': ('wrong email or password', 'invalid username or password'),
+                'captcha': ('captcha',),
+                'account_blocked': ('account has been blocked', 'account is blocked'),
+                'too_many_attempts': ('too many attempts', 'too many requests'),
+            }.items() if any(phrase in text for phrase in phrases)]
+            _LOGGER.debug(
+                'Login stage=%s completed elapsed_ms=%s state_field=%s '
+                'password_field=%s signals=%s', stage,
+                round((monotonic() - started) * 1000),
+                bool(re.search(r'name=[\"\']state[\"\']', text)),
+                bool(re.search(r'name=[\"\']password[\"\']', text)), signals,
+            )
+        return response
+
     def login(self):
         with self._lock:
             try:
+                _LOGGER.debug('Login started client=%s version=%s',
+                              httpx.__name__, httpx.__version__)
                 return self._login()
             except httpx.RequestError:
                 raise CocoroAirConnectionError("Unable to reach the login service") from None
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as error:
+                _LOGGER.debug('Login failed reason=http_status status=%s endpoint=%s',
+                              error.response.status_code,
+                              self._login_endpoint(error.response.url))
                 raise CocoroAirAuthError("Login service rejected authentication") from None
             except (KeyError, TypeError):
+                _LOGGER.debug('Login failed reason=invalid_response')
                 raise CocoroAirAuthError("Invalid login service response") from None
             except ValueError as error:
+                reasons = {
+                    'Unexpected login page': 'unexpected_login_page',
+                    'Unexpected page after identifier step': 'unexpected_identifier_result',
+                    'Login page is missing the state field': 'missing_state',
+                }
+                reason = reasons.get(str(error), 'unexpected_password_result')
+                if 'Additional account confirmation required' in str(error):
+                    reason = 'account_confirmation_required'
+                _LOGGER.debug('Login failed reason=%s', reason)
                 # Only our own fixed messages may cross the API boundary.
                 if "Additional account confirmation required" in str(error):
                     raise CocoroAirAuthError(
@@ -89,9 +159,9 @@ class CocoroAir:
                           "Chrome/131.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
-        res = self.opener.get('https://cocoroplusapp.jp.sharp/v1/cocoro-air/login')
+        res = self._login_request('entry', 'GET', BASE_URL + '/login')
         res.raise_for_status()
-        res = self.opener.get(res.json()['redirectUrl'], headers=headers, follow_redirects=True)
+        res = self._login_request('authorize', 'GET', res.json()['redirectUrl'], headers=headers, follow_redirects=True)
         res.raise_for_status()
         if res.url.host == 'cocoroplusapp.jp.sharp' and res.url.path.startswith('/air'):
             _LOGGER.info('Login success (existing session)')
@@ -100,8 +170,8 @@ class CocoroAir:
             raise ValueError("Unexpected login page")
 
         state = self._login_state(res)
-        res = self.opener.post(
-            'https://auth.cocoromembers.jp.sharp/u/login/identifier',
+        res = self._login_request(
+            'identifier', 'POST', 'https://auth.cocoromembers.jp.sharp/u/login/identifier',
             params={'state': state},
             data={
                 'state': state,
@@ -121,8 +191,8 @@ class CocoroAir:
             raise ValueError("Unexpected page after identifier step")
 
         state = self._login_state(res)
-        res = self.opener.post(
-            'https://auth.cocoromembers.jp.sharp/u/login/password',
+        res = self._login_request(
+            'password', 'POST', 'https://auth.cocoromembers.jp.sharp/u/login/password',
             params={'state': state},
             data={'state': state, 'username': self.email,
                   'password': self.password, 'action': 'default'},

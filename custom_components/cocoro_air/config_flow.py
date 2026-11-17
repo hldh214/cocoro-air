@@ -35,7 +35,8 @@ class CocoroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 else:
                     return await self.async_step_device()
 
-            except CocoroAirAuthError:
+            except CocoroAirAuthError as err:
+                _LOGGER.debug("Authentication failed: %s", err)
                 errors["base"] = "invalid_auth"
             except (CocoroAirConnectionError, CocoroAirProtocolError):
                 errors["base"] = "cannot_connect"
@@ -71,7 +72,8 @@ class CocoroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 await self.hass.async_add_executor_job(client.login)
                 await self.hass.async_add_executor_job(client.query_devices)
-            except CocoroAirAuthError:
+            except CocoroAirAuthError as err:
+                _LOGGER.debug('Reauthentication failed: %s', err)
                 errors['base'] = 'invalid_auth'
             except (CocoroAirConnectionError, CocoroAirProtocolError):
                 errors['base'] = 'cannot_connect'

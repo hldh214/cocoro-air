@@ -125,5 +125,71 @@ class LoginTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(result.exception))
 
 
+class LoginDiagnosticsTests(unittest.TestCase):
+    make_api = LoginTests.make_api
+    def test_debug_logs_cover_stages_without_credentials_or_state(self):
+        api = self.make_api(custom_prompt=True)
+        with self.assertLogs('cocoro_api_login_tests', level='DEBUG') as logs:
+            with self.assertRaises(Exception):
+                api.login()
+        output = '\n'.join(logs.output)
+        for expected in ('stage=entry', 'stage=authorize', 'stage=identifier',
+                         'stage=password', 'status=302', 'status=200',
+                         'account_confirmation_required', 'state_field=True'):
+            self.assertIn(expected, output)
+        for private in ('user@example.com', 'secret', 'PRIVATE', '?state=',
+                        'session=test', '/custom-prompt/terms'):
+            self.assertNotIn(private, output)
+
+    def test_unknown_urls_are_redacted_including_embedded_secrets(self):
+        for url in (
+            'https://user:password@unknown.example/private-email?state=TOKEN#SECRET',
+            AUTH + '/private-token?state=TOKEN#SECRET',
+            AUTH + '/u/custom-prompt/private-token?state=TOKEN',
+            AUTH + '/u/login/password?state=TOKEN',
+        ):
+            endpoint = CocoroAir._login_endpoint(httpx.URL(url))
+            for private in ('user:', 'password@', 'unknown.example', 'private-',
+                            'TOKEN', 'SECRET', '?', '#'):
+                self.assertNotIn(private, endpoint)
+
+    def test_http_error_logs_preserve_status_without_response_secrets(self):
+        api = self.make_api()
+        api._opener.close()
+        api._opener = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, text='PRIVATE_TOKEN user@example.com',
+                                          headers={'Set-Cookie': 'PRIVATE_COOKIE'})
+        ))
+        self.addCleanup(api._opener.close)
+        with self.assertLogs('cocoro_api_login_tests', level='DEBUG') as logs:
+            with self.assertRaises(Exception):
+                api.login()
+        output = '\n'.join(logs.output)
+        self.assertIn('status=503', output)
+        self.assertIn('reason=http_status', output)
+        self.assertNotIn('PRIVATE', output)
+        self.assertNotIn('user@example.com', output)
+
+    def test_page_signals_do_not_log_echoed_user_input_or_html(self):
+        api = self.make_api()
+        api._opener.close()
+        api._opener = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text=(
+                '<input name="password" value="PRIVATE_PASSWORD">'
+                '<p>Wrong email or password. user@example.com</p>'
+                '<script>PRIVATE_TOKEN</script>'
+            ))
+        ))
+        self.addCleanup(api._opener.close)
+        with self.assertLogs('cocoro_api_login_tests', level='DEBUG') as logs:
+            api._login_request('password', 'POST', AUTH + '/u/login/password?state=PRIVATE')
+        output = '\n'.join(logs.output)
+        self.assertIn('invalid_credentials', output)
+        self.assertIn('password_field=True', output)
+        self.assertNotIn('PRIVATE', output)
+        self.assertNotIn('user@example.com', output)
+        self.assertNotIn('<script>', output)
+
+
 if __name__ == "__main__":
     unittest.main()
