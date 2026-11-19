@@ -8,6 +8,12 @@ import httpx
 
 _LOGGER = logging.getLogger(__name__)
 BASE_URL = "https://cocoroplusapp.jp.sharp/v1/cocoro-air"
+_API_ROUTES = frozenset({
+    'deviceinfos', 'sensors-conceal/air-cleaner', 'notify_setting/air-cleaner',
+    'sync/air-cleaner', 'devices/control/air-cleaner', 'contents/supplies',
+    'contents/pets', 'latest/air-cleaner', 'weathers', 'history-conceal/air-cleaner',
+    'contents/control/supplies', 'contents/control/pets',
+})
 
 
 class CocoroAirError(Exception):
@@ -122,6 +128,12 @@ class CocoroAir:
                 _LOGGER.debug('Login failed reason=http_status status=%s endpoint=%s',
                               error.response.status_code,
                               self._login_endpoint(error.response.url))
+                if (error.response.status_code == 403
+                        and error.request.method == 'GET'
+                        and error.request.url == httpx.URL(BASE_URL + '/login')):
+                    raise CocoroAirConnectionError(
+                        "Sharp login endpoint rejected the request (HTTP 403)"
+                    ) from None
                 raise CocoroAirAuthError("Login service rejected authentication") from None
             except (KeyError, TypeError):
                 _LOGGER.debug('Login failed reason=invalid_response')
@@ -237,21 +249,31 @@ class CocoroAir:
         return statuses
 
     def _request(self, method, path, **kwargs):
+        route = path.lstrip('/')
+        endpoint = route if route in _API_ROUTES else '<redacted>'
         with self._lock:
             for attempt in range(2):
                 try:
-                    response = self.opener.request(method, BASE_URL + '/' + path.lstrip('/'), **kwargs)
-                except httpx.RequestError:
+                    response = self.opener.request(method, BASE_URL + '/' + route, **kwargs)
+                except httpx.RequestError as error:
+                    _LOGGER.debug('Cloud request method=%s endpoint=%s attempt=%s transport_error=%s',
+                                  method, endpoint, attempt + 1, type(error).__name__)
                     raise CocoroAirConnectionError("Unable to reach Cocoro Air") from None
+                if not response.is_success:
+                    media_type = response.headers.get('content-type', '').partition(';')[0].strip().lower()
+                    if media_type not in ('application/json', 'application/problem+json', 'text/html', 'text/plain'):
+                        media_type = 'other' if media_type else 'missing'
+                    _LOGGER.debug('Cloud response method=%s endpoint=%s attempt=%s status=%s content_type=%s',
+                                  method, endpoint, attempt + 1, response.status_code, media_type)
                 if response.status_code == 401:
                     if attempt:
                         raise CocoroAirAuthError("Cloud session is unauthorized")
                     self.login()
                     continue
                 if response.status_code >= 500:
-                    raise CocoroAirConnectionError("Cocoro Air service is unavailable")
+                    raise CocoroAirConnectionError(f"Cocoro Air service is unavailable (HTTP {response.status_code})")
                 if not response.is_success:
-                    raise CocoroAirProtocolError("Cloud request was rejected")
+                    raise CocoroAirProtocolError(f"Cloud request was rejected (HTTP {response.status_code})")
                 try:
                     data = response.json()
                 except ValueError:

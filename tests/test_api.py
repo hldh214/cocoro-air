@@ -61,6 +61,31 @@ class ApiTests(unittest.TestCase):
             api.get_status("d")
         self.assertEqual(len(logins), 1)
 
+    def test_login_entry_403_is_not_a_credentials_failure(self):
+        api = self.make_api(lambda request: httpx.Response(403))
+        with self.assertRaisesRegex(api_module.CocoroAirConnectionError, r"HTTP 403"):
+            api.login()
+
+    def test_status_403_logs_response_metadata_without_reauth_or_private_data(self):
+        requests = []
+
+        def handle(request):
+            requests.append(request)
+            return httpx.Response(
+                403, text="private-body",
+                headers={"Content-Type": "text/html; private-header", "Set-Cookie": "private-cookie"},
+            )
+
+        api = self.make_api(handle)
+        with self.assertLogs("cocoro_api_test", level="DEBUG") as logs:
+            with self.assertRaisesRegex(api_module.CocoroAirProtocolError, r"HTTP 403"):
+                api.get_status("private-device")
+        self.assertEqual(len(requests), 1)
+        output = "\n".join(logs.output)
+        self.assertIn("endpoint=sensors-conceal/air-cleaner", output)
+        self.assertIn("status=403 content_type=text/html", output)
+        self.assertNotIn("private-", output)
+
     def test_business_error_and_http_error_are_sanitized(self):
         for status, payload, exception in ((200, {"response": {"status": 400, "body": {"private": "secret"}}}, "CocoroAirProtocolError"), (500, {"private": "secret"}, "CocoroAirConnectionError"), (200, {"status": 400, "detail": "secret"}, "CocoroAirProtocolError")):
             with self.subTest(status=status, payload=payload):
